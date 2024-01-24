@@ -97,6 +97,29 @@ e1000_transmit(struct mbuf *m)
 {
   //
   // Your code here.
+  acquire(&e1000_lock);
+  uint32 npi = regs[E1000_TDT]; //next packet index
+  if(!(tx_ring[npi].status & E1000_TXD_STAT_DD)){ //不能用==判断
+    //E1000还没有完成对应的发送请求，发送环溢出，返回错误
+    //DD：硬件是否处理完这个描述符
+    release(&e1000_lock);
+    return -1;
+  }
+  
+  if(tx_mbufs[npi]){
+    mbuffree(tx_mbufs[npi]);
+  } //这里仔细思考
+  
+  tx_ring[npi].addr = (uint64)m->head;
+  tx_ring[npi].length = (uint64)m->len;
+  tx_ring[npi].cmd = E1000_TXD_CMD_EOP | E1000_TXD_CMD_RS; //此时没有DD标记了
+  //当 E1000_TXD_CMD_RS 被设置时：
+  //硬件在提取当前描述符的内容时，会自动将该描述符的status 置为 E1000_TXD_STAT_DD
+  tx_mbufs[npi] = m;
+  
+  regs[E1000_TDT] = (npi + 1) % TX_RING_SIZE;
+  
+  release(&e1000_lock);
   //
   // the mbuf contains an ethernet frame; program it into
   // the TX descriptor ring so that the e1000 sends it. Stash
@@ -111,6 +134,37 @@ e1000_recv(void)
 {
   //
   // Your code here.
+  //acquire(&e1000_lock);
+  uint32 tail = regs[E1000_RDT]; //next packet index
+  uint npi = (tail + 1) % RX_RING_SIZE;
+  struct mbuf *m;
+  while(1){
+    if(!(rx_ring[npi].status & E1000_RXD_STAT_DD)){ //不能用==判断
+    //E1000还没有完成对应的接收请求，发送环空，返回错误,这里什么也没做
+    //DD位：硬件是否处理完这个描述符
+    //DD: Indicates whether hardware is done with the descriptor. When set along with  
+    // EOP, the received packet is complete in main memory
+    //release(&e1000_lock);
+    //panic("e1000_recv: empty receive ring");
+      break;
+    }
+    
+    rx_mbufs[npi]->len = rx_ring[npi].length;
+    net_rx(rx_mbufs[npi]);
+    
+    tail = npi;
+    
+    m = mbufalloc(0);
+    rx_mbufs[npi] = m;
+    rx_ring[npi].addr = (uint64)m->head;
+    rx_ring[npi].status = 0; //DD位被清零
+    
+    regs[E1000_RDT] = npi;
+    npi = (npi + 1) % RX_RING_SIZE;
+  }
+  //有时到达的包数会超过环的大小，如何处理？？
+  regs[E1000_RDT] = tail;
+  //release(&e1000_lock);
   //
   // Check for packets that have arrived from the e1000
   // Create and deliver an mbuf for each packet (using net_rx()).

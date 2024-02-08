@@ -416,6 +416,48 @@ bmap(struct inode *ip, uint bn)
     brelse(bp);
     return addr;
   }
+//////////////////////////////////////////////////////////////
+  bn -= NINDIRECT;
+  uint l1 = bn / NINDIRECT;
+  uint l2 = bn % NINDIRECT;
+  if(bn < NBINDIRECT){  
+    // Load indirect block, allocating if necessary.
+    if((addr = ip->addrs[NDIRECT + 1]) == 0){ // addr：第一层，直接指针的那层数组
+      addr = balloc(ip->dev);  // 一层结点不存在，分配 【】---【分配的】
+      if(addr == 0)
+        return 0;
+      ip->addrs[NDIRECT + 1] = addr;
+    }
+    
+    bp = bread(ip->dev, addr); //addr是磁盘块号
+    a = (uint*)bp->data; 
+    if((addr = a[l1]) == 0){ // addr：第二层
+      addr = balloc(ip->dev); // 【】---【】---【分配的】
+      if(addr == 0){
+        brelse(bp);
+        return 0;
+        //a[bn] = addr;
+        //log_write(bp);
+      }
+      log_write(bp);
+      a[l1] = addr;
+    }
+    brelse(bp);
+    
+    bp = bread(ip->dev, addr);
+    a = (uint*)bp->data;
+    if((addr = a[l2]) == 0){ // addr：第三层
+      addr = balloc(ip->dev); // 【】---【】---【】--- [分配的块]
+      if(addr){
+        a[l2] = addr;
+        log_write(bp);
+      }
+    }
+    
+    brelse(bp);
+    return addr;
+  }
+/////////////////////////////////////////////////// //
 
   panic("bmap: out of range");
 }
@@ -447,6 +489,31 @@ itrunc(struct inode *ip)
     bfree(ip->dev, ip->addrs[NDIRECT]);
     ip->addrs[NDIRECT] = 0;
   }
+
+  //////////////////////////////////
+  if(ip->addrs[NDIRECT + 1]){
+    uint* b;
+    struct buf *bp2;
+    
+    bp = bread(ip->dev, ip->addrs[NDIRECT + 1]);
+    a = (uint*)bp->data;
+    for(j = 0; j < NINDIRECT; j++){
+      if(a[j]){ 
+        bp2 = bread(ip->dev, a[j]);
+        b = (uint*)bp2->data;
+        for(i = 0; i < NINDIRECT; i++){
+          if(b[i]) bfree(ip->dev, b[i]);
+        }
+        bfree(ip->dev, a[j]);
+        brelse(bp2);
+      }
+    }
+    brelse(bp);
+
+    bfree(ip->dev, ip->addrs[NDIRECT + 1]);
+    ip->addrs[NDIRECT + 1] = 0;
+  }
+  /////////////////////////////////
 
   ip->size = 0;
   iupdate(ip);

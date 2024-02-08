@@ -340,6 +340,30 @@ sys_open(void)
     end_op();
     return -1;
   }
+  /////////////////// //
+  int cnt = 0;
+  struct inode *oldip;
+  while(ip->type == T_SYMLINK && cnt < 10 && !(omode & O_NOFOLLOW)){
+    oldip = ip;
+    if(readi(ip, 0, (uint64)path, 0, ip->size) != ip->size || (ip = namei(path)) == 0){
+      // readi(struct inode *ip, int user_dst, uint64 dst, uint off, uint n)
+      // read data from inode
+      // 成功的情况：把ip内容复制到path，再按照path的内容读入ip。这样ip就被更新了。
+      iunlockput(oldip);
+      end_op();
+      return -1;
+    }
+    iunlockput(oldip); // oldip已经在create中加锁了
+    ilock(ip);// 给ip加锁
+    cnt++;
+  }
+  if(cnt == 10){
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+  
+  /////////////////// //
 
   if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
     if(f)
@@ -501,5 +525,31 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+uint64
+sys_symlink(void){
+  char path[MAXPATH];
+  char target[MAXPATH];
+  struct inode *ip;
+  // 获取参数
+  if((argstr(0, target, MAXPATH)) < 0)
+    return -1;
+  if((argstr(1, path, MAXPATH)) < 0)
+    return -1;
+  //
+  begin_op();
+  if((ip = create(path, T_SYMLINK, 0, 0)) == 0){
+    end_op();
+    return -1;
+  }
+
+  if(writei(ip, 0, (uint64)target, 0, strlen(target)) != strlen(target)){
+    end_op();
+    return -1;
+  }
+  end_op();
+  iunlockput(ip);
   return 0;
 }
